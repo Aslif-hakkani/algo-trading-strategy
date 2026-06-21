@@ -1,0 +1,58 @@
+name: Daily Signal Scanner
+
+on:
+  schedule:
+    # 9:20 AM IST = 3:50 AM UTC (Mon-Fri)
+    - cron: '50 3 * * 1-5'
+
+  # Manual run option (test பண்ண)
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Code checkout
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Step 2: Python setup
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Step 3: Libraries install
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install yfinance pandas numpy ta
+          pip install xgboost scikit-learn
+
+      # Step 4: Scanner run
+      - name: Run Daily Scanner
+        run: |
+          echo "=============================="
+          echo " ALGO TRADING — Signal Scanner"
+          echo " $(date '+%Y-%m-%d %H:%M') IST"
+          echo "=============================="
+          python daily_scanner.py
+
+      # Step 5: Save results
+      - name: Save Scan Results
+        run: |
+          mkdir -p scan_results
+          python daily_scanner.py > scan_results/$(date '+%Y-%m-%d').txt 2>&1
+          echo "Results saved!"
+
+      # Step 6: Commit results back to repo
+      - name: Commit Scan Log
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Actions"
+          git add scan_results/
+          git diff --staged --quiet || git commit -m "Scan result: $(date '+%Y-%m-%d')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
