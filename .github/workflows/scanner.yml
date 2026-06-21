@@ -25,25 +25,4 @@ jobs:
           pip install xgboost scikit-learn
 
       - name: Run Daily Scanner
-        run: |
-          echo "=============================="
-          echo " ALGO TRADING — Signal Scanner"
-          echo " $(date '+%Y-%m-%d %H:%M') IST"
-          echo "=============================="
-          python daily_scanner_actions.py
-
-      - name: Save Scan Results
-        run: |
-          mkdir -p scan_results
-          python daily_scanner_actions.py > scan_results/$(date '+%Y-%m-%d').txt 2>&1
-          echo "Results saved!"
-
-      - name: Commit Scan Log
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Actions"
-          git add scan_results/
-          git diff --staged --quiet || git commit -m "Scan result: $(date '+%Y-%m-%d')"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python daily_scanner_actions.py
