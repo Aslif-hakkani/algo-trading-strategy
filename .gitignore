@@ -1,0 +1,36 @@
+# Virtual Environment
+venv/
+env/
+.env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+
+# Data files (optional - comment out if you want to include)
+*.csv
+
+# Charts & Images
+*.png
+*.jpg
+
+# Scan results (will be auto-generated)
+scan_results/
+
+# Trade Journal (personal data)
+trade_journal.csv
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Jupyter
+.ipynb_checkpoints/
