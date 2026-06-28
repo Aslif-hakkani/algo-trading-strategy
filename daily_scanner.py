@@ -1,8 +1,7 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║           ALGO TRADING — Daily Signal Scanner                ║
-║           Strategy: EMA + RSI + MACD + Bollinger Bands       ║
-║           Stocks  : RELIANCE | TCS | INFY | HDFC | WIPRO     ║
+║           ALGO TRADING — Daily Signal Scanner v3             ║
+║           5 Core Conditions + ADX & Volume Extra Info        ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -21,32 +20,27 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────────────────────
 
 STOCKS = {
-    "RELIANCE.NS" : "Reliance",
-    "TCS.NS"      : "TCS",
-    "INFY.NS"     : "Infosys",
-    "HDFCBANK.NS" : "HDFC Bank",
-    "WIPRO.NS"    : "Wipro",
+    "BAJFINANCE.NS" : "Bajaj Finance",
+    "TITAN.NS"      : "Titan",
+    "SUNPHARMA.NS"  : "Sun Pharma",
+    "MARUTI.NS"     : "Maruti",
+    "ADANIENT.NS"   : "Adani Ent",
 }
 
-STOP_LOSS_PCT   = 2.0    # %
-TAKE_PROFIT_PCT = 4.0    # %
-HOLD_DAYS       = 10
+STOP_LOSS_PCT   = 2.0
+TAKE_PROFIT_PCT = 4.0
 JOURNAL_FILE    = "trade_journal.csv"
-MIN_ROWS        = 210    # Need at least 210 days for EMA200
+MIN_ROWS        = 210
 
-# ──────────────────────────────────────────────────────────────
-# COLORS
-# ──────────────────────────────────────────────────────────────
-
-G = "\033[92m"   # Green
-R = "\033[91m"   # Red
-Y = "\033[93m"   # Yellow
-B = "\033[94m"   # Blue
-C = "\033[96m"   # Cyan
-W = "\033[97m"   # White
-D = "\033[90m"   # Dark/Gray
-BOLD  = "\033[1m"
-RESET = "\033[0m"
+G    = "\033[92m"
+R    = "\033[91m"
+Y    = "\033[93m"
+B    = "\033[94m"
+C    = "\033[96m"
+W    = "\033[97m"
+D    = "\033[90m"
+BOLD = "\033[1m"
+RST  = "\033[0m"
 
 # ──────────────────────────────────────────────────────────────
 # DATA DOWNLOAD
@@ -60,8 +54,8 @@ def download_data(ticker):
         try:
             df = yf.download(
                 ticker,
-                start  = start.strftime("%Y-%m-%d"),
-                end    = end.strftime("%Y-%m-%d"),
+                start       = start.strftime("%Y-%m-%d"),
+                end         = end.strftime("%Y-%m-%d"),
                 auto_adjust = True,
                 progress    = False,
                 threads     = False
@@ -75,7 +69,6 @@ def download_data(ticker):
         except Exception:
             time.sleep(2)
 
-    # Fallback: shorter period
     try:
         df = yf.Ticker(ticker).history(period="2y")
         df.index = pd.to_datetime(df.index).tz_localize(None)
@@ -93,29 +86,51 @@ def download_data(ticker):
 # ──────────────────────────────────────────────────────────────
 
 def add_indicators(df):
-    d = df.copy()
+    d     = df.copy()
     close = d["Close"].squeeze()
     high  = d["High"].squeeze()
     low   = d["Low"].squeeze()
+    vol   = d["Volume"].squeeze()
 
+    # ── 5 MAIN CONDITIONS ──────────────────────
+    # 1. EMA
     d["EMA20"]  = ta.trend.EMAIndicator(close, 20).ema_indicator()
     d["EMA50"]  = ta.trend.EMAIndicator(close, 50).ema_indicator()
     d["EMA200"] = ta.trend.EMAIndicator(close, 200).ema_indicator()
-    d["RSI"]    = ta.momentum.RSIIndicator(close, 14).rsi()
 
-    macd = ta.trend.MACD(close)
+    # 2. RSI
+    d["RSI"] = ta.momentum.RSIIndicator(close, 14).rsi()
+
+    # 3. MACD
+    macd          = ta.trend.MACD(close)
     d["MACD"]     = macd.macd()
     d["MACD_SIG"] = macd.macd_signal()
+    d["MACD_HIST"]= macd.macd_diff()
 
-    bb = ta.volatility.BollingerBands(close)
-    bh = bb.bollinger_hband()
-    bl = bb.bollinger_lband()
-    d["BB_POS"] = (close - bl) / (bh - bl + 1e-9)
+    # 4. Bollinger Bands
+    bb          = ta.volatility.BollingerBands(close)
+    d["BB_POS"] = (close - bb.bollinger_lband()) / \
+                  (bb.bollinger_hband() - bb.bollinger_lband() + 1e-9)
+
+    # 5. EMA20 > EMA50 (Short uptrend)
+    # Already calculated above
+
+    # ── EXTRA INFO (Bonus) ─────────────────────
+    # ADX — Trend Strength
+    adx        = ta.trend.ADXIndicator(high, low, close, 14)
+    d["ADX"]   = adx.adx()
+
+    # Volume vs 20-day average
+    d["VOL_MA20"]  = vol.rolling(20).mean()
+    d["VOL_RATIO"] = vol / (d["VOL_MA20"] + 1)
+
+    # EMA Gap
+    d["EMA_GAP"] = (d["EMA50"] - d["EMA200"]) / d["EMA200"] * 100
 
     return d.dropna()
 
 # ──────────────────────────────────────────────────────────────
-# SIGNAL CHECK
+# SIGNAL CHECK — 5 MAIN CONDITIONS
 # ──────────────────────────────────────────────────────────────
 
 def check_signal(df):
@@ -124,15 +139,34 @@ def check_signal(df):
 
     last = df.iloc[-1]
 
-    rules = {
-        "EMA50 > EMA200   [Uptrend Confirmed]"    : bool(last["EMA50"]  > last["EMA200"]),
-        "RSI between 50-70  [Healthy Momentum]"   : bool(50 < last["RSI"] < 70),
-        "MACD > Signal Line [Bullish Crossover]"  : bool(last["MACD"]  > last["MACD_SIG"]),
-        "BB Position < 0.85 [Not Overbought]"     : bool(last["BB_POS"] < 0.85),
-        "EMA20 > EMA50    [Short-Term Uptrend]"   : bool(last["EMA20"]  > last["EMA50"]),
+    # ── 5 CORE RULES (All must pass!) ──────────
+    core_rules = {
+        "EMA50 > EMA200   [Uptrend]"         : bool(last["EMA50"]  > last["EMA200"]),
+        "RSI 50-70        [Momentum]"         : bool(50 < last["RSI"] < 70),
+        "MACD > Signal    [Bullish]"          : bool(last["MACD"]   > last["MACD_SIG"]),
+        "BB Position < 0.85 [Not Overbought]" : bool(last["BB_POS"] < 0.85),
+        "EMA20 > EMA50    [Short Uptrend]"    : bool(last["EMA20"]  > last["EMA50"]),
     }
 
-    return all(rules.values()), rules, last
+    all_pass = all(core_rules.values())
+    return all_pass, core_rules, last
+
+# ──────────────────────────────────────────────────────────────
+# EXTRA INFO DISPLAY
+# ──────────────────────────────────────────────────────────────
+
+def extra_info_str(last):
+    adx       = float(last["ADX"])
+    vol_ratio = float(last["VOL_RATIO"])
+    ema_gap   = float(last["EMA_GAP"])
+    macd_hist = float(last["MACD_HIST"])
+
+    adx_str = f"{adx:.1f} {'✅ Strong' if adx > 25 else '⚠️  Weak'}"
+    vol_str = f"{vol_ratio:.2f}x {'✅ High'   if vol_ratio > 1 else '⚠️  Low'}"
+    gap_str = f"{ema_gap:+.1f}%"
+    mcd_str = f"{macd_hist:+.2f} {'✅ Rising' if macd_hist > 0 else '⚠️  Falling'}"
+
+    return adx_str, vol_str, gap_str, mcd_str
 
 # ──────────────────────────────────────────────────────────────
 # JOURNAL
@@ -144,16 +178,18 @@ def init_journal():
             csv.writer(f).writerow([
                 "Date","Stock","Ticker",
                 "Entry_Price","Stop_Loss","Take_Profit",
+                "ADX","Vol_Ratio",
                 "Exit_Date","Exit_Price","Exit_Type",
                 "Return_%","Result","Notes"
             ])
 
-def log_trade(ticker, name, price, sl, tp):
+def log_trade(ticker, name, price, sl, tp, adx, vol):
     with open(JOURNAL_FILE, "a", newline="") as f:
         csv.writer(f).writerow([
             datetime.today().strftime("%Y-%m-%d"),
             name, ticker,
             f"{price:.2f}", f"{sl:.2f}", f"{tp:.2f}",
+            f"{adx:.1f}", f"{vol:.2f}",
             "","","","","OPEN",""
         ])
 
@@ -161,26 +197,24 @@ def show_open_trades():
     if not os.path.exists(JOURNAL_FILE):
         return
     df = pd.read_csv(JOURNAL_FILE)
-    open_trades = df[df["Result"] == "OPEN"]
-    if len(open_trades) == 0:
+    open_tr = df[df["Result"] == "OPEN"]
+    if len(open_tr) == 0:
         return
-
-    print(f"  {BOLD}{Y}  OPEN TRADES ({len(open_trades)}){RESET}")
-    print(f"  {'─'*62}")
-    print(f"  {D}  {'Date':<12} {'Stock':<12} {'Entry':>8} "
-          f"{'SL':>8} {'TP':>8} {'Days':>5}{RESET}")
-    print(f"  {'─'*62}")
+    print(f"\n  {BOLD}{Y}  OPEN TRADES ({len(open_tr)}){RST}")
+    print(f"  {'─'*65}")
+    print(f"  {D}  {'Date':<12} {'Stock':<14} {'Entry':>8} "
+          f"{'SL':>8} {'TP':>8} {'Days':>5}{RST}")
+    print(f"  {'─'*65}")
     today = datetime.today().date()
-    for _, row in open_trades.iterrows():
+    for _, row in open_tr.iterrows():
         try:
             days = (today - pd.to_datetime(row["Date"]).date()).days
-            sl_color = R if days > 7 else W
             print(f"  {W}  {str(row['Date']):<12} "
-                  f"{str(row['Stock']):<12} "
+                  f"{str(row['Stock']):<14} "
                   f"₹{float(row['Entry_Price']):>7.1f} "
-                  f"{R}₹{float(row['Stop_Loss']):>7.1f}{RESET} "
-                  f"{G}₹{float(row['Take_Profit']):>7.1f}{RESET} "
-                  f"{sl_color}{days:>4}d{RESET}")
+                  f"{R}₹{float(row['Stop_Loss']):>7.1f}{RST} "
+                  f"{G}₹{float(row['Take_Profit']):>7.1f}{RST} "
+                  f"{'⚠️' if days > 8 else ' '}{days:>3}d")
         except Exception:
             pass
     print()
@@ -191,26 +225,24 @@ def show_performance():
     df   = pd.read_csv(JOURNAL_FILE)
     done = df[df["Result"].isin(["WIN","LOSS"])]
     if len(done) == 0:
-        print(f"  {D}  No completed trades yet.{RESET}")
+        print(f"  {D}  No completed trades yet.{RST}\n")
         return
-
-    wins   = (done["Result"] == "WIN").sum()
-    losses = (done["Result"] == "LOSS").sum()
-    wr     = wins / len(done) * 100
-    rets   = pd.to_numeric(done["Return_%"], errors="coerce")
-    avg    = rets.mean()
-    total  = rets.sum()
-    wr_col = G if wr >= 50 else R
-    av_col = G if avg > 0 else R
-
-    print(f"  {BOLD}{C}  PERFORMANCE SUMMARY{RESET}")
-    print(f"  {'─'*40}")
-    print(f"  {W}  Total Trades  : {BOLD}{len(done)}{RESET}")
-    print(f"  {G}  Wins          : {BOLD}{wins}{RESET}")
-    print(f"  {R}  Losses        : {BOLD}{losses}{RESET}")
-    print(f"  {W}  Win Rate      : {wr_col}{BOLD}{wr:.1f}%{RESET}")
-    print(f"  {W}  Avg Return    : {av_col}{BOLD}{avg:+.2f}%{RESET}")
-    print(f"  {W}  Total Return  : {av_col}{BOLD}{total:+.2f}%{RESET}")
+    wins  = (done["Result"] == "WIN").sum()
+    loss  = (done["Result"] == "LOSS").sum()
+    wr    = wins / len(done) * 100
+    rets  = pd.to_numeric(done["Return_%"], errors="coerce")
+    avg   = rets.mean()
+    total = rets.sum()
+    wc    = G if wr   >= 50 else R
+    ac    = G if avg  >  0  else R
+    tc    = G if total > 0  else R
+    print(f"\n  {BOLD}{C}  PERFORMANCE SUMMARY{RST}")
+    print(f"  {'─'*45}")
+    print(f"  {W}  Total   : {BOLD}{len(done)}{RST}  "
+          f"({G}W:{wins}{RST} / {R}L:{loss}{RST})")
+    print(f"  {W}  Win Rate: {wc}{BOLD}{wr:.1f}%{RST}")
+    print(f"  {W}  Avg Ret : {ac}{BOLD}{avg:+.2f}%{RST}")
+    print(f"  {W}  Total   : {tc}{BOLD}{total:+.2f}%{RST}\n")
 
 # ──────────────────────────────────────────────────────────────
 # MAIN
@@ -222,15 +254,15 @@ def main():
 
     print(f"\n{BOLD}{B}"
           f"╔══════════════════════════════════════════════════╗\n"
-          f"║        ALGO TRADING — Daily Signal Scanner       ║\n"
-          f"║        {today}  {now.strftime('%I:%M %p')}  |  NSE India              ║\n"
+          f"║        ALGO TRADING — Daily Signal Scanner v3    ║\n"
+          f"║        {today}  {now.strftime('%I:%M %p')}  |  NSE India        ║\n"
           f"╚══════════════════════════════════════════════════╝"
-          f"{RESET}\n")
+          f"{RST}\n")
 
     init_journal()
     show_open_trades()
 
-    print(f"  {BOLD}{W}  Scanning {len(STOCKS)} stocks...{RESET}\n")
+    print(f"  {BOLD}{W}  Scanning {len(STOCKS)} stocks...{RST}\n")
 
     buy_signals = []
     watch_list  = []
@@ -238,57 +270,56 @@ def main():
     errors      = []
 
     for ticker, name in STOCKS.items():
-        print(f"  {D}  [{ticker.replace('.NS','')}] Fetching data...{RESET}",
-              end="\r")
+        print(f"  {D}  Scanning {name}...{RST}", end=" ", flush=True)
 
         df = download_data(ticker)
-
         if df.empty:
             errors.append(name)
-            print(f"  {R}  [{ticker.replace('.NS','')}] "
-                  f"Data unavailable — skipping{RESET}")
+            print(f"{R}FAILED{RST}")
             continue
 
         try:
             df = add_indicators(df)
             ok, rules, last = check_signal(df)
 
-            price      = float(last["Close"])
-            rsi        = float(last["RSI"])
-            ema_gap    = float(
-                (last["EMA50"] - last["EMA200"])
-                / last["EMA200"] * 100
-            )
-            score      = sum(rules.values())
+            price   = float(last["Close"])
+            rsi     = float(last["RSI"])
+            score   = sum(rules.values())
+            adx     = float(last["ADX"])
+            vol_r   = float(last["VOL_RATIO"])
 
             if ok:
-                sl = price * (1 - STOP_LOSS_PCT   / 100)
+                sl = price * (1 - STOP_LOSS_PCT / 100)
                 tp = price * (1 + TAKE_PROFIT_PCT / 100)
                 buy_signals.append(dict(
                     ticker=ticker, name=name,
                     price=price, sl=sl, tp=tp,
-                    rsi=rsi, ema_gap=ema_gap, rules=rules
+                    rsi=rsi, rules=rules,
+                    adx=adx, vol_r=vol_r,
+                    last=last
                 ))
+                print(f"{G}BUY SIGNAL! ({score}/5){RST}")
             elif score >= 3:
                 waiting = [
-                    k.split("[")[0].strip().replace("  "," ")
+                    k.split("[")[0].strip()
                     for k, v in rules.items() if not v
                 ]
                 watch_list.append(dict(
                     name=name, price=price,
                     rsi=rsi, score=score,
-                    rules=rules, waiting=waiting
+                    waiting=waiting,
+                    adx=adx, vol_r=vol_r
                 ))
+                print(f"{Y}Watch ({score}/5){RST}")
             else:
-                no_signals.append(dict(
-                    name=name, price=price, score=score
-                ))
+                no_signals.append(name)
+                print(f"{D}No signal ({score}/5){RST}")
 
         except Exception as e:
             errors.append(name)
-            print(f"  {R}  [{name}] Error: {e}{RESET}")
+            print(f"{R}Error{RST}")
 
-    # ── BUY SIGNALS ──────────────────────────────────────
+    # ── BUY SIGNALS ──────────────────────────────
 
     print()
     if buy_signals:
@@ -297,92 +328,105 @@ def main():
               f"  ║   ▲  BUY SIGNAL(S) FOUND  —  "
               f"{len(buy_signals)} stock(s)          ║\n"
               f"  ╚══════════════════════════════════════════════╝"
-              f"{RESET}\n")
+              f"{RST}\n")
 
         for s in buy_signals:
-            sym = s['ticker'].replace('.NS','')
-            print(f"  {BOLD}{G}  ▲  {s['name']}  ({sym}){RESET}")
-            print(f"  {'─'*55}")
-            print(f"  {W}  Current Price  : {BOLD}₹{s['price']:.2f}{RESET}")
-            print(f"  {G}  Take Profit    : {BOLD}₹{s['tp']:.2f}{RESET}"
-                  f"  {D}(+{TAKE_PROFIT_PCT}%){RESET}")
-            print(f"  {R}  Stop Loss      : {BOLD}₹{s['sl']:.2f}{RESET}"
-                  f"  {D}(-{STOP_LOSS_PCT}%){RESET}")
-            print(f"  {W}  RSI            : {s['rsi']:.1f}"
-                  f"   EMA Gap : {s['ema_gap']:+.1f}%")
-            print(f"\n  {D}  Signal Conditions:{RESET}")
-            for rule, result in s["rules"].items():
-                icon = f"{G}  ✔{RESET}" if result else f"{R}  ✘{RESET}"
-                print(f"     {icon}  {W}{rule}{RESET}")
+            sym = s["ticker"].replace(".NS","")
+            adx_s, vol_s, gap_s, mcd_s = extra_info_str(s["last"])
 
-            print(f"\n  {BOLD}{Y}  ACTION STEPS:{RESET}")
-            print(f"  {W}  1. Open TradingView  →  Paper Trading")
-            print(f"     2. Search : {BOLD}{sym}{RESET}")
-            print(f"     3. BUY    : Market Order   (10 shares)")
-            print(f"     4. Alert  : Price < ₹{s['sl']:.0f}  "
-                  f"[Stop Loss]")
-            print(f"     5. Alert  : Price > ₹{s['tp']:.0f}  "
-                  f"[Take Profit]{RESET}")
+            print(f"  {BOLD}{G}  ▲  {s['name']} ({sym}){RST}")
+            print(f"  {'─'*55}")
+
+            # Price info
+            print(f"  {W}  Current Price  : {BOLD}₹{s['price']:.2f}{RST}")
+            print(f"  {G}  Take Profit    : {BOLD}₹{s['tp']:.2f}{RST}"
+                  f"  {D}(+{TAKE_PROFIT_PCT}%){RST}")
+            print(f"  {R}  Stop Loss      : {BOLD}₹{s['sl']:.2f}{RST}"
+                  f"  {D}(-{STOP_LOSS_PCT}%){RST}")
+
+            # 5 Main Conditions
+            print(f"\n  {BOLD}{W}  ★ 5 CORE CONDITIONS (All Pass!):{RST}")
+            for rule, result in s["rules"].items():
+                icon = f"{G}  ✔{RST}" if result else f"{R}  ✘{RST}"
+                print(f"     {icon}  {W}{rule}{RST}")
+
+            # Extra Info
+            print(f"\n  {BOLD}{C}  ➕ EXTRA INFO (Bonus):{RST}")
+            print(f"     {D}  ADX (Trend Strength) : {W}{adx_s}{RST}")
+            print(f"     {D}  Volume vs Avg20      : {W}{vol_s}{RST}")
+            print(f"     {D}  EMA Gap (50-200)     : {W}{gap_s}{RST}")
+            print(f"     {D}  MACD Histogram       : {W}{mcd_s}{RST}")
+
+            # Action
+            print(f"\n  {BOLD}{Y}  ACTION:{RST}")
+            print(f"  {W}  1. TradingView → {sym} Chart verify")
+            print(f"     2. Note: Entry ₹{s['price']:.0f} | "
+                  f"SL ₹{s['sl']:.0f} | TP ₹{s['tp']:.0f}")
+            print(f"     3. Set SL Alert : ₹{s['sl']:.0f}")
+            print(f"     4. Set TP Alert : ₹{s['tp']:.0f}{RST}")
             print(f"  {'─'*55}\n")
 
         save = input(
-            f"  {Y}  Save to trade journal? (y/n) : {RESET}"
+            f"  {Y}  Save to journal? (y/n) : {RST}"
         ).strip().lower()
-
         if save == "y":
             for s in buy_signals:
                 log_trade(s["ticker"], s["name"],
-                          s["price"], s["sl"], s["tp"])
-            print(f"\n  {G}  ✔  Saved to {JOURNAL_FILE}{RESET}\n")
+                          s["price"], s["sl"], s["tp"],
+                          s["adx"], s["vol_r"])
+            print(f"\n  {G}  ✔  Saved to {JOURNAL_FILE}{RST}\n")
 
     else:
-        print(f"  {Y}  ◆  No BUY signals today.{RESET}\n")
+        print(f"  {Y}  ◆  No BUY signals today.{RST}\n")
 
-    # ── WATCH LIST ───────────────────────────────────────
+    # ── WATCH LIST ───────────────────────────────
 
     if watch_list:
-        print(f"  {BOLD}{Y}  WATCH LIST  —  "
-              f"{len(watch_list)} stock(s) almost ready{RESET}")
+        print(f"  {BOLD}{Y}  WATCH LIST — {len(watch_list)} stocks{RST}")
         print(f"  {'─'*55}")
         for w in watch_list:
-            print(f"\n  {Y}  ◈  {w['name']}{RESET}"
-                  f"  —  ₹{w['price']:.2f}"
-                  f"  |  {w['score']}/5 rules"
-                  f"  |  RSI: {w['rsi']:.1f}")
-            print(f"  {D}     Waiting for : "
-                  f"{', '.join(w['waiting'])}{RESET}")
+            adx_label = f"ADX:{w['adx']:.0f}" \
+                        f"{'✅' if w['adx'] > 25 else '⚠️'}"
+            vol_label = f"Vol:{w['vol_r']:.1f}x" \
+                        f"{'✅' if w['vol_r'] > 1 else '⚠️'}"
+            print(f"\n  {Y}  ◈  {w['name']}{RST}"
+                  f"  ₹{w['price']:.1f}"
+                  f"  |  {w['score']}/5"
+                  f"  |  RSI:{w['rsi']:.1f}"
+                  f"  |  {adx_label}"
+                  f"  |  {vol_label}")
+            print(f"     {R}  Waiting : "
+                  f"{', '.join(w['waiting'])}{RST}")
         print()
 
-    # ── NO SIGNAL ────────────────────────────────────────
+    # ── NO SIGNAL ────────────────────────────────
 
     if no_signals:
-        names = "  |  ".join([s["name"] for s in no_signals])
-        print(f"  {D}  ○  No Signal   :  {names}{RESET}\n")
+        print(f"  {D}  ○  No Signal : "
+              f"{' | '.join(no_signals)}{RST}\n")
 
     if errors:
-        names = "  |  ".join(errors)
-        print(f"  {R}  ⚠  Data Failed :  {names}  "
-              f"(retry in 5 min){RESET}\n")
-
-    # ── PERFORMANCE ──────────────────────────────────────
+        print(f"  {R}  ⚠  Failed    : "
+              f"{' | '.join(errors)}{RST}\n")
 
     show_performance()
 
-    # ── FOOTER ───────────────────────────────────────────
-
     print(f"""
-  {BOLD}{W}  TRADING RULES{RESET}
+  {BOLD}{W}  STRATEGY RULES{RST}
   {'─'*50}
-  {G}  ✔  Stop Loss hit     →  Close immediately{RESET}
-  {G}  ✔  Take Profit hit   →  Close & move on{RESET}
-  {G}  ✔  After {HOLD_DAYS} days       →  Close regardless{RESET}
-  {R}  ✘  Do NOT move Stop Loss on emotion{RESET}
-  {R}  ✘  Do NOT trade without a signal{RESET}
+  {W}  Core Signal  : ALL 5 conditions must pass{RST}
+  {W}  Extra Info   : ADX + Volume (bonus context){RST}
+  {G}  ✔  ADX > 25  = Strong trend (better signal){RST}
+  {G}  ✔  Vol > 1x  = High interest (better signal){RST}
   {'─'*50}
-  {D}  Next scan  :  Tomorrow at 9:20 AM
-  Command    :  python daily_scanner.py{RESET}
+  {G}  ✔  SL hit    →  Close immediately{RST}
+  {G}  ✔  TP hit    →  Close & celebrate{RST}
+  {G}  ✔  10 days   →  Close regardless{RST}
+  {R}  ✘  No signal →  No trade!{RST}
+  {'─'*50}
+  {D}  Next scan : Tomorrow 9:20 AM
+  Command   : python daily_scanner.py{RST}
 """)
-
 
 if __name__ == "__main__":
     main()

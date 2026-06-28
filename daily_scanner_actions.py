@@ -17,11 +17,11 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────
 
 STOCKS = {
-    "RELIANCE.NS" : "Reliance",
-    "TCS.NS"      : "TCS",
-    "INFY.NS"     : "Infosys",
-    "HDFCBANK.NS" : "HDFC Bank",
-    "WIPRO.NS"    : "Wipro",
+    "BAJFINANCE.NS" : "Bajaj Finance",
+    "TITAN.NS"      : "Titan",
+    "SUNPHARMA.NS"  : "Sun Pharma",
+    "MARUTI.NS"     : "Maruti",
+    "ADANIENT.NS"   : "Adani Ent",
 }
 
 STOP_LOSS_PCT   = 2.0
