@@ -17,11 +17,18 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────
 
 STOCKS = {
+    # NSE India
     "BAJFINANCE.NS" : "Bajaj Finance",
     "TITAN.NS"      : "Titan",
     "SUNPHARMA.NS"  : "Sun Pharma",
-    "MARUTI.NS"     : "Maruti",
     "ADANIENT.NS"   : "Adani Ent",
+    "MARUTI.NS"     : "Maruti",
+    # US Stocks
+    "AAPL"  : "Apple",
+    "MSFT"  : "Microsoft",
+    "GOOGL" : "Google",
+    "TSLA"  : "Tesla",
+    "NVDA"  : "Nvidia",
 }
 
 STOP_LOSS_PCT   = 2.0
