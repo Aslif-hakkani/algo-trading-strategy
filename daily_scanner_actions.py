@@ -17,18 +17,26 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────
 
 STOCKS = {
-    # NSE India
+    # 🇮🇳 NSE India — Moneybhai
     "BAJFINANCE.NS" : "Bajaj Finance",
     "TITAN.NS"      : "Titan",
     "SUNPHARMA.NS"  : "Sun Pharma",
     "ADANIENT.NS"   : "Adani Ent",
     "MARUTI.NS"     : "Maruti",
-    # US Stocks
+
+    # 🇺🇸 US Stocks — TradingView
     "AAPL"  : "Apple",
     "MSFT"  : "Microsoft",
     "GOOGL" : "Google",
     "TSLA"  : "Tesla",
     "NVDA"  : "Nvidia",
+
+    # 💱 Forex — eToro / XM
+    "EURUSD=X" : "EUR/USD",
+    "GBPUSD=X" : "GBP/USD",
+    "USDJPY=X" : "USD/JPY",
+    "USDLKR=X" : "USD/LKR",
+    "AUDUSD=X" : "AUD/USD",
 }
 
 STOP_LOSS_PCT   = 2.0

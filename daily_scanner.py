@@ -21,19 +21,26 @@ warnings.filterwarnings("ignore")
 # ──────────────────────────────────────────────────────────────
 
 STOCKS = {
-    # 🇮🇳 NSE India — Manual / Moneybhai Paper Trade
+    # 🇮🇳 NSE India — Moneybhai
     "BAJFINANCE.NS" : "Bajaj Finance",
     "TITAN.NS"      : "Titan",
     "SUNPHARMA.NS"  : "Sun Pharma",
     "ADANIENT.NS"   : "Adani Ent",
     "MARUTI.NS"     : "Maruti",
 
-    # 🇺🇸 US Stocks — TradingView Paper Trade
+    # 🇺🇸 US Stocks — TradingView
     "AAPL"  : "Apple",
     "MSFT"  : "Microsoft",
     "GOOGL" : "Google",
     "TSLA"  : "Tesla",
     "NVDA"  : "Nvidia",
+
+    # 💱 Forex — eToro / XM
+    "EURUSD=X" : "EUR/USD",
+    "GBPUSD=X" : "GBP/USD",
+    "USDJPY=X" : "USD/JPY",
+    "USDLKR=X" : "USD/LKR",
+    "AUDUSD=X" : "AUD/USD",
 }
 
 NSE_STOCKS = [k for k in STOCKS if k.endswith(".NS")]
@@ -339,7 +346,8 @@ def main():
     errors  = []
 
     for ticker, name in STOCKS.items():
-        market = "NSE 🇮🇳" if ticker.endswith(".NS") else "US 🇺🇸"
+        market = "NSE 🇮🇳" if ticker.endswith(".NS") else \
+                "FX 💱"   if "=X" in ticker else "US 🇺🇸"
         print(f"  {D}  [{market}] {name}...{RST}", end=" ", flush=True)
 
         df = download_data(ticker)
@@ -357,7 +365,9 @@ def main():
             adx   = float(last["ADX"])
             vol_r = float(last["VOL_RATIO"])
             score = sum(rules.values())
-            curr  = "₹" if ticker.endswith(".NS") else "$"
+            curr  = "₹" if ticker.endswith(".NS") else \
+                    ""   if "=X" in ticker else "$"
+
 
             if ok:
                 sl = price * (1 - STOP_LOSS_PCT / 100)
