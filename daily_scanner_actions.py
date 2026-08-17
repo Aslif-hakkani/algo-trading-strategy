@@ -1,7 +1,8 @@
 """
-Daily Signal Scanner v6 — GitHub Actions Version
-NSE India (10) + US Stocks (10) + Crypto (5) = 25 stocks
-No colors, no input() — pure text output for GitHub logs
+Daily Signal Scanner v7 — GitHub Actions Version
+NSE(10) + US(10) + Crypto(5) = 25 stocks
+6 Conditions: 5 Technical + Candlestick Pattern
+No colors, no input() — pure text for GitHub logs
 """
 
 import yfinance as yf
@@ -62,21 +63,21 @@ MIN_ROWS  = 210
 
 def get_market(ticker):
     if ticker.endswith(".NS"):
-        return "NSE", "🇮🇳", "Rs"
+        return "NSE", "Rs"
     elif "-USD" in ticker:
-        return "CRYPTO", "🪙", "$"
+        return "CRYPTO", "$"
     else:
-        return "US", "🇺🇸", "$"
+        return "US", "$"
 
 def get_sl_tp(ticker, price):
     if "-USD" in ticker:
-        sl = price * (1 - CRYPTO_SL / 100)
-        tp = price * (1 + CRYPTO_TP / 100)
-        return sl, tp, CRYPTO_SL, CRYPTO_TP
+        return (price*(1-CRYPTO_SL/100),
+                price*(1+CRYPTO_TP/100),
+                CRYPTO_SL, CRYPTO_TP)
     else:
-        sl = price * (1 - STOCK_SL / 100)
-        tp = price * (1 + STOCK_TP / 100)
-        return sl, tp, STOCK_SL, STOCK_TP
+        return (price*(1-STOCK_SL/100),
+                price*(1+STOCK_TP/100),
+                STOCK_SL, STOCK_TP)
 
 def get_platform(market):
     if market == "NSE":
@@ -147,6 +148,8 @@ def add_indicators(df):
     d["MACD_HIST"] = macd.macd_diff()
 
     bb          = ta.volatility.BollingerBands(close)
+    d["BB_HIGH"]= bb.bollinger_hband()
+    d["BB_LOW"] = bb.bollinger_lband()
     d["BB_POS"] = (close - bb.bollinger_lband()) / \
                   (bb.bollinger_hband() - bb.bollinger_lband() + 1e-9)
 
@@ -160,21 +163,106 @@ def add_indicators(df):
     return d.dropna()
 
 # ──────────────────────────────────────────────────────────────
-# SIGNAL CHECK
+# CANDLESTICK PATTERN DETECTION
+# ──────────────────────────────────────────────────────────────
+
+def detect_candle_pattern(df):
+    if len(df) < 3:
+        return False, "None", ""
+
+    c0  = df.iloc[-3]
+    c1  = df.iloc[-2]
+    c2  = df.iloc[-1]
+
+    o2  = float(c2["Open"]);  h2 = float(c2["High"])
+    l2  = float(c2["Low"]);   c_2= float(c2["Close"])
+    o1  = float(c1["Open"]);  h1 = float(c1["High"])
+    l1  = float(c1["Low"]);   c_1= float(c1["Close"])
+    o0  = float(c0["Open"]);  c_0= float(c0["Close"])
+
+    total2   = h2 - l2 + 1e-9
+    body2    = abs(c_2 - o2)
+    lower_w2 = min(o2, c_2) - l2
+    upper_w2 = h2 - max(o2, c_2)
+
+    total1   = h1 - l1 + 1e-9
+    body1    = abs(c_1 - o1)
+
+    # 1. Hammer
+    if (lower_w2 >= 2.0 * max(body2, total2*0.01) and
+            upper_w2 <= 0.15 * total2 and
+            body2 >= 0.05 * total2 and c_2 >= o2):
+        return True, "Hammer", \
+            "Long lower wick — buyers rejected lower prices!"
+
+    # 2. Bullish Engulfing
+    if (c_1 < o1 and c_2 > o2 and
+            o2 <= c_1 and c_2 >= o1 and body2 > body1):
+        return True, "Bullish Engulfing", \
+            "Green candle engulfs previous red — bulls took over!"
+
+    # 3. Morning Star
+    if (c_0 < o0 and
+            body1 <= 0.3*(h1-l1+1e-9) and
+            c_2 > o2 and c_2 > (o0+c_0)/2):
+        return True, "Morning Star", \
+            "3-candle reversal — strong bullish signal!"
+
+    # 4. Doji at Support
+    if body2 <= 0.1 * total2:
+        bb_low = float(c2["BB_LOW"]) if "BB_LOW" in c2 else 0
+        ema50  = float(c2["EMA50"])  if "EMA50"  in c2 else 0
+        if (abs(l2-bb_low) <= 0.02*c_2 or
+                abs(l2-ema50) <= 0.02*c_2):
+            return True, "Doji at Support", \
+                "Indecision at support — reversal possible!"
+
+    # 5. Bullish Marubozu
+    if (c_2 > o2 and body2 >= 0.85*total2 and
+            lower_w2 <= 0.05*total2 and upper_w2 <= 0.05*total2):
+        return True, "Bullish Marubozu", \
+            "Full green candle — strong buying pressure!"
+
+    # 6. Piercing Line
+    if (c_1 < o1 and c_2 > o2 and
+            o2 < c_1 and c_2 > (o1+c_1)/2):
+        return True, "Piercing Line", \
+            "Green pierces red midpoint — bullish!"
+
+    # 7. Three White Soldiers
+    if (c_0>o0 and c_1>o1 and c_2>o2 and
+            c_1>c_0 and c_2>c_1 and
+            body2 >= 0.5*total2):
+        return True, "Three White Soldiers", \
+            "3 consecutive green candles — strong uptrend!"
+
+    return False, "None", ""
+
+# ──────────────────────────────────────────────────────────────
+# SIGNAL CHECK — 6 CONDITIONS
 # ──────────────────────────────────────────────────────────────
 
 def check_signal(df):
     if len(df) < 5:
-        return False, {}, None
-    last  = df.iloc[-1]
-    rules = {
+        return False, {}, None, False, "None", ""
+
+    last = df.iloc[-1]
+
+    core_rules = {
         "EMA50 > EMA200   [Uptrend]"         : bool(last["EMA50"]  > last["EMA200"]),
         "RSI 50-70        [Momentum]"         : bool(50 < last["RSI"] < 70),
         "MACD > Signal    [Bullish]"          : bool(last["MACD"]   > last["MACD_SIG"]),
         "BB Position < 0.85 [Not Overbought]" : bool(last["BB_POS"] < 0.85),
         "EMA20 > EMA50    [Short Uptrend]"    : bool(last["EMA20"]  > last["EMA50"]),
     }
-    return all(rules.values()), rules, last
+
+    pat_found, pat_name, pat_desc = detect_candle_pattern(df)
+
+    all_rules = dict(core_rules)
+    all_rules[f"Bullish Candle [{pat_name}]"] = pat_found
+
+    return all(all_rules.values()), all_rules, last, \
+           pat_found, pat_name, pat_desc
 
 # ──────────────────────────────────────────────────────────────
 # MAIN
@@ -189,13 +277,14 @@ def main():
                    if not k.endswith(".NS") and "-USD" not in k)
     crypto_c = sum(1 for k in STOCKS if "-USD" in k)
 
-    print("=" * 60)
-    print("  ALGO TRADING — Daily Signal Scanner v6")
-    print(f"  Date   : {today}")
-    print(f"  Time   : {now.strftime('%I:%M %p')} IST")
-    print(f"  Stocks : NSE({nse_c}) + US({us_c}) + Crypto({crypto_c})"
-          f" = {len(STOCKS)}")
-    print("=" * 60)
+    print("=" * 62)
+    print("  ALGO TRADING — Daily Signal Scanner v7")
+    print(f"  Date    : {today}")
+    print(f"  Time    : {now.strftime('%I:%M %p')} IST")
+    print(f"  Stocks  : NSE({nse_c}) + US({us_c})"
+          f" + Crypto({crypto_c}) = {len(STOCKS)}")
+    print("  Signal  : 6 Conditions (Technical + Candle)")
+    print("=" * 62)
     print()
 
     buy_signals = []
@@ -204,8 +293,10 @@ def main():
     errors      = []
 
     for ticker, name in STOCKS.items():
-        market, flag, curr = get_market(ticker)
-        print(f"  [{flag} {market}] {name}...", end=" ", flush=True)
+        market, curr = get_market(ticker)
+        flag = ("NSE" if market=="NSE" else
+                "CRYPTO" if market=="CRYPTO" else "US")
+        print(f"  [{flag}] {name}...", end=" ", flush=True)
 
         df = download_data(ticker)
         if df.empty:
@@ -215,7 +306,8 @@ def main():
 
         try:
             df = add_indicators(df)
-            ok, rules, last = check_signal(df)
+            ok, rules, last, pat_found, pat_name, pat_desc = \
+                check_signal(df)
 
             price = float(last["Close"])
             rsi   = float(last["RSI"])
@@ -230,63 +322,68 @@ def main():
                     price=price, sl=sl, tp=tp,
                     sl_pct=sl_pct, tp_pct=tp_pct,
                     rsi=rsi, adx=adx, vol_r=vol_r,
-                    rules=rules, market=market, curr=curr
+                    rules=rules, market=market, curr=curr,
+                    pattern=pat_name, pat_desc=pat_desc
                 ))
-                print(f"*** BUY SIGNAL! ({score}/5) ***")
-
-            elif score >= 3:
+                print(f"*** BUY! ({score}/6) [{pat_name}] ***")
+            elif score >= 4:
                 waiting = [k.split("[")[0].strip()
                            for k, v in rules.items() if not v]
                 watch_list.append(dict(
                     name=name, price=price, curr=curr,
                     rsi=rsi, score=score, adx=adx,
-                    vol_r=vol_r, waiting=waiting, market=market
+                    vol_r=vol_r, waiting=waiting,
+                    market=market,
+                    pattern=pat_name if pat_found else "None"
                 ))
-                print(f"Watch ({score}/5)")
+                pat_txt = f" [{pat_name}]" if pat_found else ""
+                print(f"Watch ({score}/6){pat_txt}")
             else:
                 no_signals.append(name)
-                print(f"No signal ({score}/5)")
+                print(f"No signal ({score}/6)")
 
         except Exception as e:
             errors.append(name)
             print(f"Error: {str(e)[:30]}")
 
-    # ── BUY SIGNALS ──────────────────────────────────────
+    # ── RESULTS ──────────────────────────────────────────
 
     print()
-    print("=" * 60)
+    print("=" * 62)
     print("  SCAN RESULTS")
-    print("=" * 60)
+    print("=" * 62)
 
     if buy_signals:
-        print(f"\n  *** {len(buy_signals)} BUY SIGNAL(S) FOUND ***\n")
+        print(f"\n  *** {len(buy_signals)} BUY SIGNAL(S)"
+              f" — 6/6 CONDITIONS PASS ***\n")
 
         for s in buy_signals:
             sym  = s["ticker"].replace(".NS","").replace("-USD","")
             curr = s["curr"]
             ep   = s["price"]
-            fmt  = ".0f" if ep > 100 else ".5f"
+            fmt  = ".2f" if ep > 10 else ".6f"
             adx_s = "STRONG" if s["adx"]   > 25 else "weak"
             vol_s = "HIGH"   if s["vol_r"] >  1 else "low"
 
-            print(f"  {'='*55}")
+            print(f"  {'='*58}")
             print(f"  [BUY] {s['name']} ({sym}) — {s['market']}")
-            print(f"  {'='*55}")
+            print(f"  {'='*58}")
             print(f"  Price      : {curr} {ep:{fmt}}")
             print(f"  Take Profit: {curr} {s['tp']:{fmt}}"
                   f"  (+{s['tp_pct']:.0f}%)")
             print(f"  Stop Loss  : {curr} {s['sl']:{fmt}}"
                   f"  (-{s['sl_pct']:.0f}%)")
 
-            if s["market"] == "CRYPTO":
-                print(f"  NOTE: Crypto wider SL/TP — higher volatility!")
+            print(f"\n  --- CANDLE PATTERN (6th Condition) ---")
+            print(f"  Pattern : {s['pattern']}")
+            print(f"  Meaning : {s['pat_desc']}")
 
             print(f"\n  --- EXTRA INFO ---")
             print(f"  ADX  : {s['adx']:.1f}  [{adx_s}]")
             print(f"  Vol  : {s['vol_r']:.2f}x  [{vol_s}]")
             print(f"  RSI  : {s['rsi']:.1f}")
 
-            print(f"\n  --- 5 CORE CONDITIONS (All Pass!) ---")
+            print(f"\n  --- 6 CONDITIONS (All Pass!) ---")
             for rule, result in s["rules"].items():
                 status = "PASS" if result else "FAIL"
                 print(f"    [{status}] {rule}")
@@ -296,31 +393,39 @@ def main():
             print(f"  Search   : {sym}")
             print(f"  SL Alert : {curr} {s['sl']:{fmt}}")
             print(f"  TP Alert : {curr} {s['tp']:{fmt}}")
+            if s["market"] == "CRYPTO":
+                print(f"  NOTE: Crypto wider SL/TP — high volatility!")
             print()
 
     else:
-        print(f"\n  No BUY signals today.\n")
+        print(f"\n  No BUY signals today.")
+        print(f"  (Need all 6 conditions"
+              f" including candle pattern)\n")
 
     # ── WATCH LIST ───────────────────────────────────────
 
-    for market_name, label in [("NSE","NSE India 🇮🇳"),
-                                 ("US","US Stocks 🇺🇸"),
-                                 ("CRYPTO","Crypto 🪙")]:
-        wl = [w for w in watch_list if w["market"] == market_name]
+    for mkt_name, label in [("NSE",    "NSE India"),
+                              ("US",     "US Stocks"),
+                              ("CRYPTO", "Crypto")]:
+        wl = [w for w in watch_list if w["market"] == mkt_name]
         if not wl:
             continue
         print(f"  [{label}] Watch List:")
-        print(f"  {'─'*55}")
+        print(f"  {'─'*58}")
         for w in wl:
             adx_s = "STRONG" if w["adx"]   > 25 else "weak"
             vol_s = "HIGH"   if w["vol_r"] >  1 else "low"
             ep    = w["price"]
-            fmt   = ".0f" if ep > 100 else ".5f"
-            print(f"  {w['name']:14s} | {w['curr']}{ep:{fmt}}"
-                  f" | {w['score']}/5"
+            fmt   = ".2f" if ep > 10 else ".6f"
+            pat   = (f" | Pattern:{w['pattern']}"
+                     if w.get("pattern","None") != "None" else "")
+            print(f"  {w['name']:14s}"
+                  f" | {w['curr']}{ep:{fmt}}"
+                  f" | {w['score']}/6"
                   f" | RSI:{w['rsi']:.1f}"
                   f" | ADX:{w['adx']:.0f}({adx_s})"
-                  f" | Vol:{w['vol_r']:.1f}x({vol_s})")
+                  f" | Vol:{w['vol_r']:.1f}x({vol_s})"
+                  f"{pat}")
             print(f"    Waiting: {', '.join(w['waiting'])}")
         print()
 
@@ -332,34 +437,38 @@ def main():
         print(f"  Failed    : {' | '.join(errors)}")
 
     print()
-    print("=" * 60)
+    print("=" * 62)
     print("  SUMMARY")
-    print("=" * 60)
-    print(f"  Total Scanned : {len(STOCKS)}"
+    print("=" * 62)
+    print(f"  Total    : {len(STOCKS)}"
           f" (NSE:{nse_c} | US:{us_c} | Crypto:{crypto_c})")
-    print(f"  BUY Signals   : {len(buy_signals)}")
-    print(f"  Watch List    : {len(watch_list)}")
-    print(f"  No Signal     : {len(no_signals)}")
-    print(f"  Errors        : {len(errors)}")
+    print(f"  BUY      : {len(buy_signals)}")
+    print(f"  Watch    : {len(watch_list)}")
+    print(f"  No Signal: {len(no_signals)}")
+    print(f"  Errors   : {len(errors)}")
+    print()
+    print("  6 CONDITIONS FOR BUY SIGNAL:")
+    print("  [1] EMA50 > EMA200    [Uptrend]")
+    print("  [2] RSI 50-70         [Momentum]")
+    print("  [3] MACD > Signal     [Bullish]")
+    print("  [4] BB Pos < 0.85     [Not Overbought]")
+    print("  [5] EMA20 > EMA50     [Short Uptrend]")
+    print("  [6] Candle Pattern    [Hammer/Engulfing/etc]")
     print()
     print("  PLATFORMS:")
-    print(f"  NSE stocks → Moneybhai"
-          f"  (SL:{STOCK_SL}% TP:{STOCK_TP}%)")
-    print(f"  US stocks  → TradingView"
-          f"  (SL:{STOCK_SL}% TP:{STOCK_TP}%)")
-    print(f"  Crypto     → Bybit Demo"
-          f"  (SL:{CRYPTO_SL}% TP:{CRYPTO_TP}%)")
+    print(f"  NSE    -> Moneybhai  (SL:{STOCK_SL}% TP:{STOCK_TP}%)")
+    print(f"  US     -> TradingView(SL:{STOCK_SL}% TP:{STOCK_TP}%)")
+    print(f"  Crypto -> Bybit Demo (SL:{CRYPTO_SL}% TP:{CRYPTO_TP}%)")
     print()
     print("  RULES:")
-    print("  [1] All 5 conditions = BUY signal")
-    print("  [2] ADX > 25 = Stronger signal (bonus)")
-    print("  [3] SL hit   -> Close immediately")
-    print("  [4] TP hit   -> Close & celebrate")
-    print("  [5] 10 days  -> Close regardless")
-    print("  [6] No signal -> No trade!")
+    print("  [1] All 6 conditions = BUY signal")
+    print("  [2] SL hit   -> Close immediately")
+    print("  [3] TP hit   -> Close & celebrate")
+    print("  [4] 10 days  -> Close regardless")
+    print("  [5] No signal -> No trade!")
     print()
     print(f"  Next scan: Tomorrow 9:20 AM (auto)")
-    print("=" * 60)
+    print("=" * 62)
 
     sys.exit(0)
 
